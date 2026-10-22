@@ -30,6 +30,8 @@
   .pop{animation:pop .6s ease-out}
   @keyframes pop{0%{transform:scale(1)}35%{transform:scale(1.22)}70%{transform:scale(.95)}100%{transform:scale(1)}}
   .dim{opacity:.35;pointer-events:none;transition:opacity .4s}
+  .nope{animation:nope .4s}
+  @keyframes nope{0%,100%{transform:translateX(0)}25%{transform:translateX(-16px)}50%{transform:translateX(14px)}75%{transform:translateX(-8px)}}
 
   #next{left:960px;top:880px;width:120px;height:120px;border-radius:50%;background:#FC632A;border:8px solid #fff;
     box-shadow:0 10px 24px rgba(40,30,110,.4);cursor:pointer;display:none;touch-action:manipulation;z-index:50}
@@ -63,7 +65,7 @@
   var CARD_X = 1146, CARD_Y = [300, 470, 640, 810];
   var PX = 130, PY = 290, PW = 933, PH = 700;
   var scale = 1, round = 0, solved = false, light = { x: PW / 2, y: PH / 2, r: 150 }, dbg = /debug/.test(location.search);
-  var stats = { drags: 0, ptr: '-', wrong: 0, right: 0 };
+  var stats = { drags: 0, taps: 0, ptr: '-', wrong: 0, right: 0 };
 
   function fit() {
     scale = Math.min(innerWidth / 1920, innerHeight / 1080);
@@ -169,17 +171,31 @@
     var el = e.currentTarget;
     try { el.setPointerCapture(e.pointerId); } catch (err) {}
     el.classList.remove('home', 'pop'); el.classList.add('lift'); el.style.zIndex = ++z;
-    cur = { el: el, id: e.pointerId, sx: e.clientX, sy: e.clientY, ox: parseFloat(el.style.left), oy: parseFloat(el.style.top) };
+    cur = { el: el, id: e.pointerId, sx: e.clientX, sy: e.clientY, ox: parseFloat(el.style.left), oy: parseFloat(el.style.top), moved: 0 };
     dragCard = el; sfx.grab();
   }
   addEventListener('pointermove', function (e) {
     if (!cur || e.pointerId !== cur.id) return;
-    place(cur.el, cur.ox + (e.clientX - cur.sx) / scale, cur.oy + (e.clientY - cur.sy) / scale);
+    var dx = (e.clientX - cur.sx) / scale, dy = (e.clientY - cur.sy) / scale;
+    cur.moved = Math.max(cur.moved, Math.sqrt(dx * dx + dy * dy));
+    place(cur.el, cur.ox + dx, cur.oy + dy);
   });
   function drop(e) {
     if (!cur || e.pointerId !== cur.id) return;
-    var el = cur.el; cur = null; dragCard = null; stats.drags++;
+    var el = cur.el, tap = cur.moved < 14; cur = null; dragCard = null;
     el.classList.remove('lift');
+    if (tap) {
+      /* a tap (or a click shared from a student's phone) answers straight away */
+      stats.taps++;
+      if (el.dataset.id === PLACES[round]) { stats.right++; win(el); }
+      else {
+        stats.wrong++; sfx.boop();
+        el.classList.remove('nope'); void el.offsetWidth; el.classList.add('nope');
+        photo.classList.remove('shake'); void photo.offsetWidth; photo.classList.add('shake');
+      }
+      return;
+    }
+    stats.drags++;
     var x = parseFloat(el.style.left) + el.offsetWidth / 2, y = parseFloat(el.style.top) + el.offsetHeight / 2;
     var over = x > PX && x < PX + PW && y > PY && y < PY + PH;
     if (over && el.dataset.id === PLACES[round]) { stats.right++; win(el); }
@@ -228,7 +244,7 @@
       d.textContent = 'screen ' + innerWidth + 'x' + innerHeight + ' @' + (window.devicePixelRatio || 1) + 'x\n' +
         'pointer ' + stats.ptr + '  fps ' + fps + '\n' +
         'audio ' + (ac ? ac.state : 'not started') + '\n' +
-        'drags ' + stats.drags + '  right ' + stats.right + '  wrong ' + stats.wrong + '\n' +
+        'taps ' + stats.taps + '  drags ' + stats.drags + '  right ' + stats.right + '  wrong ' + stats.wrong + '\n' +
         'browser ' + (m || ['?']).slice(0, 2).join(' ');
     }, 500);
   }
