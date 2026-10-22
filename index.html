@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta name="robots" content="noindex,nofollow">
+<title>Mystery place</title>
+<style>
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;height:100%;background:#6743FF;overflow:hidden;touch-action:none}
+  #stage{position:absolute;left:50%;top:50%;width:1920px;height:1080px;transform-origin:center center;
+    background:url(bg.png);user-select:none;-webkit-user-select:none;overflow:hidden}
+  .abs{position:absolute}
+
+  #photo{left:130px;top:290px;width:933px;height:700px;border-radius:30px;overflow:hidden;background:#6743FF;
+    box-shadow:0 0 0 10px #fff,0 14px 30px rgba(40,30,110,.38)}
+  #photo.shake{animation:shake .45s}
+  @keyframes shake{0%,100%{transform:translateX(0)}20%{transform:translateX(-16px)}40%{transform:translateX(14px)}60%{transform:translateX(-10px)}80%{transform:translateX(6px)}}
+  #photo img{position:absolute;left:0;top:0;width:933px;height:700px;display:block;-webkit-user-drag:none}
+  #sharp{--x:466;--y:350;--r:150;
+    -webkit-mask-image:radial-gradient(circle calc(var(--r)*1px) at calc(var(--x)*1px) calc(var(--y)*1px),#000 0,#000 72%,transparent 100%);
+            mask-image:radial-gradient(circle calc(var(--r)*1px) at calc(var(--x)*1px) calc(var(--y)*1px),#000 0,#000 72%,transparent 100%)}
+  #ring{position:absolute;border:7px solid rgba(255,255,255,.95);border-radius:50%;pointer-events:none;
+    box-shadow:0 0 44px rgba(255,255,255,.65),inset 0 0 34px rgba(255,255,255,.35)}
+  #ring.off{opacity:0;transition:opacity .5s}
+
+  .card{width:648px;height:176px;background-size:100% 100%;touch-action:none;cursor:grab;-webkit-user-drag:none}
+  .home{transition:left .45s cubic-bezier(.34,1.56,.64,1),top .45s cubic-bezier(.34,1.56,.64,1)}
+  .lift{transform:scale(1.07) rotate(-2deg);cursor:grabbing}
+  .pop{animation:pop .6s ease-out}
+  @keyframes pop{0%{transform:scale(1)}35%{transform:scale(1.22)}70%{transform:scale(.95)}100%{transform:scale(1)}}
+  .dim{opacity:.35;pointer-events:none;transition:opacity .4s}
+
+  #next{left:960px;top:880px;width:120px;height:120px;border-radius:50%;background:#FC632A;border:8px solid #fff;
+    box-shadow:0 10px 24px rgba(40,30,110,.4);cursor:pointer;display:none;touch-action:manipulation;z-index:50}
+  #next.show{display:block;animation:pulse 1.1s ease-in-out infinite}
+  #next:after{content:"";position:absolute;left:34px;top:30px;width:30px;height:30px;border-top:12px solid #fff;border-right:12px solid #fff;transform:rotate(45deg)}
+  @keyframes pulse{0%,100%{transform:scale(1)}50%{transform:scale(1.12)}}
+
+  #confetti{left:0;top:0;width:1920px;height:1080px;pointer-events:none;z-index:60}
+  #debug{display:none;left:1240px;top:36px;width:620px;padding:10px 18px;border-radius:18px;background:rgba(240,238,255,.95);
+    font:600 22px/1.35 Menlo,Consolas,monospace;color:#3b2f9e;white-space:pre;z-index:70}
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="photo" class="abs">
+    <img id="blur" alt="" draggable="false">
+    <img id="sharp" alt="" draggable="false">
+    <div id="ring"></div>
+  </div>
+  <div id="next" class="abs"></div>
+  <canvas id="confetti" class="abs" width="1920" height="1080"></canvas>
+  <div id="debug" class="abs"></div>
+</div>
+
+<script>
+(function () {
+  var $ = function (s) { return document.querySelector(s); };
+  var stage = $('#stage'), photo = $('#photo'), sharp = $('#sharp'), blur = $('#blur'), ring = $('#ring'), next = $('#next');
+  var COLORS = ['#6743FF', '#FC632A', '#FECD07', '#7CC29A', '#2D7AD6', '#ff6fa8'];
+  var PLACES = ['library', 'zoo', 'park', 'pool'];
+  var CARD_X = 1146, CARD_Y = [300, 470, 640, 810];
+  var PX = 130, PY = 290, PW = 933, PH = 700;
+  var scale = 1, round = 0, solved = false, light = { x: PW / 2, y: PH / 2, r: 150 }, dbg = /debug/.test(location.search);
+  var stats = { drags: 0, ptr: '-', wrong: 0, right: 0 };
+
+  function fit() {
+    scale = Math.min(innerWidth / 1920, innerHeight / 1080);
+    stage.style.transform = 'translate(-50%,-50%) scale(' + scale + ')';
+  }
+  addEventListener('resize', fit); fit();
+
+  /* ---------- sound ---------- */
+  var ac = null;
+  function ensureAudio() {
+    try {
+      if (!ac) { var C = window.AudioContext || window.webkitAudioContext; if (C) ac = new C(); }
+      if (ac && ac.state === 'suspended') ac.resume();
+    } catch (e) {}
+  }
+  function tone(f, t0, dur, type, vol) {
+    if (!ac) return;
+    var o = ac.createOscillator(), g = ac.createGain(), t = ac.currentTime + t0;
+    o.type = type || 'sine'; o.frequency.setValueAtTime(f, t);
+    g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(vol || 0.25, t + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g); g.connect(ac.destination); o.start(t); o.stop(t + dur + 0.05);
+  }
+  var sfx = {
+    grab: function () { tone(660, 0, 0.07, 'sine', 0.15); },
+    boop: function () { tone(240, 0, 0.12, 'square', 0.12); tone(180, 0.1, 0.18, 'square', 0.12); },
+    win: function () { [784, 988, 1175, 1568].forEach(function (f, i) { tone(f, i * 0.09, 0.5, 'triangle', 0.22); }); },
+    whoosh: function () { tone(300, 0, 0.35, 'sawtooth', 0.04); tone(700, 0.05, 0.3, 'sine', 0.06); },
+    fanfare: function () { [523, 659, 784, 1047, 784, 1047, 1319].forEach(function (f, i) { tone(f, i * 0.12, 0.3, 'triangle', 0.25); }); }
+  };
+  addEventListener('pointerdown', function (e) { ensureAudio(); stats.ptr = e.pointerType || '?'; }, true);
+
+  /* ---------- confetti (runs only while there are pieces) ---------- */
+  var cv = $('#confetti'), cx = cv.getContext('2d'), parts = [], running = false;
+  function burst(x, y, n, power) {
+    for (var i = 0; i < n; i++) {
+      var a = Math.random() * Math.PI * 2, s = 5 + Math.random() * (power || 14);
+      parts.push({ x: x, y: y, vx: Math.cos(a) * s, vy: Math.sin(a) * s - 9, r: Math.random() * 6, vr: (Math.random() - 0.5) * 0.4,
+        w: 12 + Math.random() * 14, h: 7 + Math.random() * 10, star: Math.random() < 0.35, c: COLORS[i % COLORS.length], life: 75 + Math.random() * 40 });
+    }
+    if (!running) { running = true; requestAnimationFrame(tick); }
+  }
+  function starPath(c, R) {
+    c.beginPath();
+    for (var i = 0; i < 10; i++) { var rr = i % 2 ? R * 0.45 : R, a = -Math.PI / 2 + i * Math.PI / 5; c.lineTo(Math.cos(a) * rr, Math.sin(a) * rr); }
+    c.closePath();
+  }
+  function tick() {
+    cx.clearRect(0, 0, 1920, 1080);
+    parts = parts.filter(function (p) { return p.life > 0; });
+    parts.forEach(function (p) {
+      p.x += p.vx; p.y += p.vy; p.vy += 0.45; p.vx *= 0.99; p.r += p.vr; p.life--;
+      cx.save(); cx.translate(p.x, p.y); cx.rotate(p.r); cx.globalAlpha = Math.min(1, p.life / 25); cx.fillStyle = p.c;
+      if (p.star) { starPath(cx, p.w * 0.8); cx.fill(); } else cx.fillRect(-p.w / 2, -p.h / 2, p.w, p.h);
+      cx.restore();
+    });
+    if (parts.length) requestAnimationFrame(tick); else { running = false; cx.clearRect(0, 0, 1920, 1080); }
+  }
+
+  /* ---------- spotlight ---------- */
+  function setLight(x, y, r) {
+    light.x = x; light.y = y; if (r) light.r = r;
+    sharp.style.setProperty('--x', x); sharp.style.setProperty('--y', y); sharp.style.setProperty('--r', light.r);
+    ring.style.left = (x - light.r - 7) + 'px'; ring.style.top = (y - light.r - 7) + 'px';
+    ring.style.width = ring.style.height = (light.r * 2 + 14) + 'px';
+  }
+  var dragCard = null;
+  function localPoint(e) {
+    var rc = photo.getBoundingClientRect();
+    return { x: (e.clientX - rc.left) / scale, y: (e.clientY - rc.top) / scale };
+  }
+  function moveLight(e) {
+    if (solved || dragCard) return;
+    var p = localPoint(e);
+    if (p.x < 0 || p.y < 0 || p.x > PW || p.y > PH) return;
+    if (e.pointerType === 'mouse' || e.buttons) setLight(p.x, p.y);
+  }
+  photo.addEventListener('pointerdown', function (e) { if (!solved) { var p = localPoint(e); setLight(p.x, p.y); } });
+  addEventListener('pointermove', moveLight);
+
+  function growLight(done) {
+    var r0 = light.r, t0 = performance.now();
+    ring.className = 'off';
+    (function step(t) {
+      var k = Math.min(1, (t - t0) / 700), e = 1 - Math.pow(1 - k, 3);
+      setLight(light.x, light.y, r0 + (1250 - r0) * e);
+      if (k < 1) requestAnimationFrame(step); else if (done) done();
+    })(t0);
+  }
+
+  /* ---------- cards ---------- */
+  var cards = PLACES.map(function (id, i) {
+    var el = document.createElement('div');
+    el.className = 'card abs'; el.dataset.id = id; el.style.backgroundImage = 'url(card_' + id + '.png)';
+    el.home = { x: CARD_X, y: CARD_Y[i] }; place(el, el.home.x, el.home.y);
+    stage.appendChild(el); el.addEventListener('pointerdown', down); return el;
+  });
+  function place(el, x, y) { el.style.left = x + 'px'; el.style.top = y + 'px'; }
+  var z = 10, cur = null;
+  function down(e) {
+    if (solved) return;
+    e.preventDefault();
+    var el = e.currentTarget;
+    try { el.setPointerCapture(e.pointerId); } catch (err) {}
+    el.classList.remove('home', 'pop'); el.classList.add('lift'); el.style.zIndex = ++z;
+    cur = { el: el, id: e.pointerId, sx: e.clientX, sy: e.clientY, ox: parseFloat(el.style.left), oy: parseFloat(el.style.top) };
+    dragCard = el; sfx.grab();
+  }
+  addEventListener('pointermove', function (e) {
+    if (!cur || e.pointerId !== cur.id) return;
+    place(cur.el, cur.ox + (e.clientX - cur.sx) / scale, cur.oy + (e.clientY - cur.sy) / scale);
+  });
+  function drop(e) {
+    if (!cur || e.pointerId !== cur.id) return;
+    var el = cur.el; cur = null; dragCard = null; stats.drags++;
+    el.classList.remove('lift');
+    var x = parseFloat(el.style.left) + el.offsetWidth / 2, y = parseFloat(el.style.top) + el.offsetHeight / 2;
+    var over = x > PX && x < PX + PW && y > PY && y < PY + PH;
+    if (over && el.dataset.id === PLACES[round]) { stats.right++; win(el); }
+    else {
+      if (over) { stats.wrong++; photo.classList.remove('shake'); void photo.offsetWidth; photo.classList.add('shake'); }
+      sfx.boop(); el.classList.add('home'); place(el, el.home.x, el.home.y);
+      setTimeout(function () { el.classList.remove('home'); }, 500);
+    }
+  }
+  addEventListener('pointerup', drop); addEventListener('pointercancel', drop);
+
+  /* ---------- rounds ---------- */
+  function win(el) {
+    solved = true;
+    el.classList.add('home'); el.classList.remove('dim');
+    place(el, PX + (PW - 648) / 2, PY + PH - 176 + 6); el.style.zIndex = 40;
+    setTimeout(function () { el.classList.remove('home'); el.classList.add('pop'); }, 460);
+    sfx.win(); sfx.whoosh();
+    growLight(function () {
+      burst(PX + PW / 2, PY + PH / 2, 110, 17);
+      if (round === PLACES.length - 1) { setTimeout(sfx.fanfare, 250); burst(1450, 600, 90, 18); }
+      next.classList.add('show');
+    });
+  }
+  function startRound() {
+    solved = false; next.classList.remove('show'); ring.className = '';
+    blur.src = PLACES[round] + '_blur.jpg'; sharp.src = PLACES[round] + '.jpg';
+    light.r = 150; setLight(PW / 2, PH / 2, 150);
+    cards.forEach(function (el, i) {
+      el.classList.remove('pop', 'lift'); el.style.zIndex = 5 + i;
+      el.classList.add('home'); place(el, el.home.x, el.home.y);
+      setTimeout(function () { el.classList.remove('home'); }, 500);
+    });
+  }
+  next.addEventListener('click', function () { sfx.whoosh(); round = (round + 1) % PLACES.length; startRound(); });
+  startRound();
+
+  /* ---------- optional diagnostics: add ?debug=1 to the address ---------- */
+  if (dbg) {
+    var d = $('#debug'); d.style.display = 'block';
+    var frames = 0, last = performance.now(), lf = 0, fps = 0;
+    (function f() { frames++; requestAnimationFrame(f); })();
+    setInterval(function () {
+      var now = performance.now(); fps = Math.round((frames - lf) * 1000 / (now - last)); last = now; lf = frames;
+      var m = navigator.userAgent.match(/(Chrome|CriOS|Edg|Firefox|Version)\/[\d.]+/g);
+      d.textContent = 'screen ' + innerWidth + 'x' + innerHeight + ' @' + (window.devicePixelRatio || 1) + 'x\n' +
+        'pointer ' + stats.ptr + '  fps ' + fps + '\n' +
+        'audio ' + (ac ? ac.state : 'not started') + '\n' +
+        'drags ' + stats.drags + '  right ' + stats.right + '  wrong ' + stats.wrong + '\n' +
+        'browser ' + (m || ['?']).slice(0, 2).join(' ');
+    }, 500);
+  }
+})();
+</script>
+</body>
+</html>
